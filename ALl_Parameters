@@ -1,0 +1,121 @@
+USE [ALMHedging]
+GO
+/****** Object:  StoredProcedure [dbo].[AddOptionsToNumerixRun]    Script Date: 3/4/2022 8:04:19 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[AddOptionsToNumerixRun] @MarketDate             DATE, 
+                                               @InforceDate            DATE, 
+                                               @CalculationName        VARCHAR(50) = 'Daily Run', 
+                                               @CompanySource          VARCHAR(50) = 'All', 
+                                               @BalanceSheet           VARCHAR(50) = 'All', 
+                                               @ToRecalibrate          BIT         = 0, 
+                                               @ToCalcVega             BIT         = 0, 
+                                               @ToCalcTheta            BIT         = 0, 
+                                               @ToCalcRho              BIT         = 0, 
+                                               @Priority               BIT         = 10, 
+                                               @ToRunDeterministically BIT         = 0, 
+                                               @EffectiveDate          DATE        = NULL, 
+                                               @FundCode               VARCHAR(50) = 'All', 
+                                               @OptionType             VARCHAR(50) = 'All', 
+                                               @IndexTicker           VARCHAR(50) = 'All', 
+                                               @OptionFlavor           VARCHAR(50) = 'All', 
+                                               @ReferenceDate          DATE        = NULL, 
+                                               @ExpirationDate         DATE        = NULL, 
+                                               @ContractNumber         VARCHAR(50) = 'All', 
+                                               @ToRunAudit             BIT         = 0,
+                                               @idScenario             INT         = 1, 
+                                               @RunGrouping            VARCHAR(50) = 'Test', 
+                                               @CalibrationName        VARCHAR(50) = 'Test', 
+											   @Product				   VARCHAR(50) = 'All',
+											   @ToRunConstantGrowthModel  BIT      =0
+AS
+     BEGIN
+	 	 delete from OptionValuationDevelopment.dbo.tblProcessQueue where MarketDate=@MarketDate and CalculationName=@CalculationName and InforceDate=@InforceDate
+         DECLARE @idProcessQueue INT;
+         EXEC [dbo].[CreateNumerixRun] 
+              @MarketDate, 
+              @InforceDate, 
+              @idProcessQueue out, 
+              @RunGrouping, 
+              @CalculationName, 
+              @CalibrationName, 
+              @idScenario, 
+              @ToRecalibrate, 
+              @ToCalcVega, 
+              @ToCalcTheta, 
+              @ToCalcRho, 
+              @Priority, 
+              @ToRunDeterministically, 
+              @EffectiveDate,
+			  @ToRunConstantGrowthModel;
+
+         --Insert into tblProcessQueue if this process does not exist
+         INSERT INTO OptionValuationDevelopment.dbo.tblOptionsToRun
+         (idProcessQueue, 
+          idTradeInformation
+         )
+                SELECT DISTINCT 
+                       @idProcessQueue, 
+                       inv.idTradeInformation
+                FROM OptionValuationDevelopment.dbo.tblProcessQueue pro
+                     INNER JOIN (SELECT  * FROM dbo.factOptionInventory with (nolock)) inv ON pro.InforceDate = inv.InforceDate
+                     INNER JOIN (SELECT  * FROM dbo.dimLoadInformation with (nolock)) lod ON inv.idLoadInformation = lod.idLoadInformation
+                     INNER JOIN (SELECT  * FROM dbo.dimFundCode with (nolock)) fund ON inv.idfundcode = fund.idfundcode
+                     INNER JOIN (SELECT  * FROM dbo.dimContractNumber with (nolock)) con ON inv.idContractNumber = con.idContractNumber
+                     INNER JOIN (SELECT  * FROM dbo.dimInstrumentDetail with (nolock)) det ON inv.idOptionDetail = det.idOptionDetail
+                     INNER JOIN (SELECT  * FROM dbo.dimLiabilityDetail with (nolock)) liab ON inv.idLIabilityDetail = liab.idLiabilityDetail
+                     INNER JOIN (SELECT  * FROM dbo.dimTradeInformation with (nolock)) trd ON inv.idTradeInformation = trd.idTradeInformation
+                     INNER JOIN (SELECT  * FROM dbo.dimRecord with (nolock)) rec ON inv.idRecord = rec.idRecord
+                     LEFT JOIN OptionValuationDevelopment.dbo.tblOptionsToRun prev ON pro.idProcessQueue = prev.idProcessQueue
+                                                                                      AND inv.idTradeInformation = prev.idTradeInformation
+                WHERE pro.idProcessQueue = @idProcessQueue
+                      AND prev.idProcessQueue IS NULL
+                      AND @companySource IN(fund.CompanySource, 'All')
+                     AND @balanceSheet IN(fund.balancesheet, 'All')
+                AND @fundcode IN(fund.fundcode, 'All')
+         AND @optiontype IN(det.optiontype, 'All')
+		 --and OptionType<>'equity future'
+         AND @IndexTicker IN(det.IndexTicker, 'All')
+         AND @optionflavor IN(det.optionflavor, 'All')
+         AND (@ReferenceDate IS NULL
+              OR det.ReferenceDate = @ReferenceDate)
+         AND (@ExpirationDate IS NULL
+              OR det.ExpirationDate = @ExpirationDate)
+         AND @ContractNumber IN(con.ContractNumber, 'All')
+		 and @Product in (liab.Product,'All');
+         INSERT INTO OptionValuationDevelopment.dbo.tblOptionAudit
+         (idProcessQueue, 
+          idTradeInformation
+         )
+                SELECT DISTINCT 
+                       @idProcessQueue, 
+                       inv.idTradeInformation
+                FROM OptionValuationDevelopment.dbo.tblProcessQueue pro
+                     INNER JOIN (SELECT  * FROM dbo.factOptionInventory with (nolock)) inv ON pro.InforceDate = inv.InforceDate
+                     INNER JOIN (SELECT  * FROM dbo.dimLoadInformation with (nolock)) lod ON inv.idLoadInformation = lod.idLoadInformation
+                     INNER JOIN (SELECT  * FROM dbo.dimFundCode with (nolock)) fund ON inv.idfundcode = fund.idfundcode
+                     INNER JOIN (SELECT  * FROM dbo.dimContractNumber with (nolock)) con ON inv.idContractNumber = con.idContractNumber
+                     INNER JOIN (SELECT  * FROM dbo.dimInstrumentDetail with (nolock)) det ON inv.idOptionDetail = det.idOptionDetail
+                     INNER JOIN (SELECT  * FROM dbo.dimLiabilityDetail with (nolock)) liab ON inv.idLIabilityDetail = liab.idLiabilityDetail
+                     INNER JOIN (SELECT  * FROM dbo.dimTradeInformation with (nolock)) trd ON inv.idTradeInformation = trd.idTradeInformation
+                     INNER JOIN (SELECT  * FROM dbo.dimRecord with (nolock)) rec ON inv.idRecord = rec.idRecord
+                     LEFT JOIN (SELECT  * FROM OptionValuationDevelopment.dbo.tblOptionAudit with (nolock)) prev ON pro.idProcessQueue = prev.idProcessQueue
+                                                                                     AND inv.idTradeInformation = prev.idTradeInformation
+                WHERE pro.idProcessQueue = @idProcessQueue
+                      AND prev.idProcessQueue IS NULL
+                      AND @companySource IN(fund.CompanySource, 'All')
+                     AND @balanceSheet IN(fund.balancesheet, 'All')
+                AND @fundcode IN(fund.fundcode, 'All')
+         AND @optiontype IN(det.optiontype, 'All')
+         AND @IndexTicker IN(det.IndexTicker, 'All')
+AND @optionflavor IN(det.optionflavor, 'All')
+AND (@ReferenceDate IS NULL
+     OR det.ReferenceDate = @ReferenceDate)
+AND (@ExpirationDate IS NULL
+     OR det.ExpirationDate = @ExpirationDate)
+AND @ToRunAudit = 1
+AND @ContractNumber IN(con.ContractNumber, 'All')
+and @Product in (liab.Product,'All');
+     END;
